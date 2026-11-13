@@ -38,7 +38,7 @@ jobs:
         run: az extension add -n ml --yes
 
       - name: Resolve Dev workspace name
-        uses: ./.github/actions/resolve-aml-workspace.yml
+        uses: ./.github/actions/resolve-aml-workspace
         with:
           aml_env: dev
           project: ${{ env.PROJECT }}
