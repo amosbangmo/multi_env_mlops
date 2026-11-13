@@ -2,6 +2,7 @@
 
 import argparse
 from pathlib import Path
+from xml.parsers.expat import model
 
 import numpy as np
 import pandas as pd
@@ -91,6 +92,10 @@ def main(args: argparse.Namespace) -> None:
     # --- Save model with signature ---
     signature = infer_signature(X_val, y_val_pred)
     input_example = X_val.head(5)
+
+    print("TRAINING COMPLETED", flush=True)
+    print("SKOPS TRUSTED TYPES FIX ACTIVE", flush=True)
+
     mlflow.sklearn.save_model(
         sk_model=model,
         path=args.model_output,
