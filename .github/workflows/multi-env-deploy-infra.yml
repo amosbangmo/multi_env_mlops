@@ -36,36 +36,41 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Export workflow inputs
+        run: |
+          echo "TARGET_ENV=${{ inputs.environment }}" >> "$GITHUB_ENV"
+          echo "RUN_NUMBER=${{ github.run_number }}" >> "$GITHUB_ENV"
+
       - name: Ensure Resource Group exists
         run: |
           az group create \
-            --name rg-${{ env.PROJECT }}-${{ inputs.environment }} \
+            --name "rg-${PROJECT}-${TARGET_ENV}" \
             --location swedencentral \
-            --tags project=${{ env.PROJECT }} environment=${{ inputs.environment }} managedBy=bicep
+            --tags project=${PROJECT} environment=${TARGET_ENV} managedBy=bicep
 
       - name: Bicep Lint
         run: |
-          if [ "${{ inputs.environment }}" = "shared" ]; then
-            az bicep build --file ${{ env.BICEP_DIR }}/shared.bicep
+          if [ "$TARGET_ENV" = "shared" ]; then
+            az bicep build --file "${BICEP_DIR}/shared.bicep"
           else
-            az bicep build --file ${{ env.BICEP_DIR }}/main.bicep
+            az bicep build --file "${BICEP_DIR}/main.bicep"
           fi
 
       - name: What-If
         run: |
-          if [ "${{ inputs.environment }}" = "shared" ]; then
+          if [ "$TARGET_ENV" = "shared" ]; then
             az deployment group what-if \
-              --resource-group rg-${{ env.PROJECT }}-shared \
-              --template-file ${{ env.BICEP_DIR }}/shared.bicep \
-              --parameters ${{ env.BICEP_DIR }}/parameters/shared.bicepparam
+              --resource-group "rg-${PROJECT}-shared" \
+              --template-file "${BICEP_DIR}/shared.bicep" \
+              --parameters "${BICEP_DIR}/parameters/shared.bicepparam"
           else
             WS_TS=$(date -u +%H%M%S)
             az deployment group what-if \
-              --resource-group rg-${{ env.PROJECT }}-${{ inputs.environment }} \
-              --template-file ${{ env.BICEP_DIR }}/main.bicep \
-              --parameters ${{ env.BICEP_DIR }}/parameters/${{ inputs.environment }}.bicepparam \
+              --resource-group "rg-${PROJECT}-${TARGET_ENV}" \
+              --template-file "${BICEP_DIR}/main.bicep" \
+              --parameters "${BICEP_DIR}/parameters/${TARGET_ENV}.bicepparam" \
               --parameters workspaceNameSuffix="$WS_TS" \
-              --parameters keyVaultNameSuffix='${{ github.run_number }}'
+              --parameters keyVaultNameSuffix="$RUN_NUMBER"
           fi
 
   deploy:
@@ -83,6 +88,11 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Export workflow inputs
+        run: |
+          echo "TARGET_ENV=${{ inputs.environment }}" >> "$GITHUB_ENV"
+          echo "RUN_NUMBER=${{ github.run_number }}" >> "$GITHUB_ENV"
+
       - name: Install ML Extension
         run: az extension add -n ml --yes
 
@@ -91,31 +101,31 @@ jobs:
         id: registry
         run: |
           REGISTRY_ID=$(az ml registry show \
-            --name ${{ env.PROJECT }}-registry \
-            --resource-group rg-${{ env.PROJECT }}-shared \
+            --name ${PROJECT}-registry \
+            --resource-group rg-${PROJECT}-shared \
             --query id -o tsv 2>/dev/null || echo "")
           echo "registry_id=$REGISTRY_ID" >> "$GITHUB_OUTPUT"
 
       - name: Deploy Bicep
         id: deploy
         run: |
-          if [ "${{ inputs.environment }}" = "shared" ]; then
+          if [ "$TARGET_ENV" = "shared" ]; then
             az deployment group create \
-              --resource-group rg-${{ env.PROJECT }}-shared \
-              --template-file ${{ env.BICEP_DIR }}/shared.bicep \
-              --parameters ${{ env.BICEP_DIR }}/parameters/shared.bicepparam \
-              --name deploy-shared-${{ github.run_number }}
+              --resource-group "rg-${PROJECT}-shared" \
+              --template-file "${BICEP_DIR}/shared.bicep" \
+              --parameters "${BICEP_DIR}/parameters/shared.bicepparam" \
+              --name "deploy-shared-${RUN_NUMBER}"
           else
             # Capture the actual deployed workspace name from Bicep outputs.
             WS_TS=$(date -u +%H%M%S)
             WORKSPACE_NAME=$(az deployment group create \
-              --resource-group rg-${{ env.PROJECT }}-${{ inputs.environment }} \
-              --template-file ${{ env.BICEP_DIR }}/main.bicep \
-              --parameters ${{ env.BICEP_DIR }}/parameters/${{ inputs.environment }}.bicepparam \
+              --resource-group "rg-${PROJECT}-${TARGET_ENV}" \
+              --template-file "${BICEP_DIR}/main.bicep" \
+              --parameters "${BICEP_DIR}/parameters/${TARGET_ENV}.bicepparam" \
               --parameters workspaceNameSuffix="$WS_TS" \
-              --parameters keyVaultNameSuffix='${{ github.run_number }}' \
+              --parameters keyVaultNameSuffix="$RUN_NUMBER" \
               --parameters mlRegistryId='${{ steps.registry.outputs.registry_id }}' \
-              --name deploy-${{ inputs.environment }}-${{ github.run_number }} \
+              --name "deploy-${TARGET_ENV}-${RUN_NUMBER}" \
               --query properties.outputs.workspaceName.value \
               -o tsv)
             echo "workspace_name=$WORKSPACE_NAME" >> "$GITHUB_OUTPUT"
@@ -127,19 +137,19 @@ jobs:
           # Use the deployed name (includes suffix) instead of a hardcoded convention.
           az ml workspace update \
             --name '${{ steps.deploy.outputs.workspace_name }}' \
-            --resource-group rg-${{ env.PROJECT }}-${{ inputs.environment }} \
+            --resource-group "rg-${PROJECT}-${TARGET_ENV}" \
             --system-datastores-auth-mode identity
 
       - name: Deploy Endpoint Subscription Roles (prod only)
         if: inputs.environment == 'prod'
         run: |
           UAMI_PRINCIPAL_ID=$(az identity show \
-            --name ${{ env.PROJECT }}-endpoint-identity \
-            --resource-group rg-${{ env.PROJECT }}-prod \
+            --name "${PROJECT}-endpoint-identity" \
+            --resource-group "rg-${PROJECT}-prod" \
             --query principalId -o tsv)
 
           az deployment sub create \
             --location swedencentral \
-            --template-file ${{ env.BICEP_DIR }}/endpoint-sub-roles.bicep \
+            --template-file "${BICEP_DIR}/endpoint-sub-roles.bicep" \
             --parameters endpointPrincipalId="$UAMI_PRINCIPAL_ID" \
-            --name endpoint-sub-roles-${{ github.run_number }}
+            --name "endpoint-sub-roles-${RUN_NUMBER}"

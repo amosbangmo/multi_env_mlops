@@ -2,7 +2,7 @@ $schema: https://azuremlschemas.azureedge.net/latest/managedOnlineDeployment.sch
 name: blue
 endpoint_name: readmission-online
 model: azureml://registries/readmit-registry/models/readmission-model/labels/latest
-environment: azureml://registries/readmit-registry/environments/readmission-inference-env/versions/1
+environment: azureml://registries/readmit-registry/environments/readmission-inference-env/labels/latest
 code_configuration:
   code: scoring
   scoring_script: score.py

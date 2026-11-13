@@ -16,9 +16,10 @@ permissions:
   contents: read
 
 env:
-  REGISTRY_NAME: readmit-registry
   PROJECT: readmit
   MLOPS_DIR: mlops/azureml
+  REGISTRY_NAME: ${{ vars.REGISTRY_NAME }}
+  INFERENCE_ENV_VERSION: ${{ vars.INFERENCE_ENV_VERSION }}
 
 jobs:
   # -----------------------------------------------------------------------
@@ -53,38 +54,16 @@ jobs:
         run: az extension add -n ml --yes
 
       - name: Resolve Test workspace name
-        run: |
-          # Prefer lookup in expected test RG; fallback to global prefix match.
-          EXPECTED_TEST_RG="rg-${{ env.PROJECT }}-test"
-          TEST_WS_ID=$(az ml workspace list \
-            --resource-group "$EXPECTED_TEST_RG" \
-            --query "sort_by(@, &name) | [-1].id" -o tsv 2>/dev/null || true)
-          if [[ -z "$TEST_WS_ID" ]]; then
-            TEST_WS_ID=$(az ml workspace list \
-              --query "[?starts_with(name, '${{ env.PROJECT }}-test-')] | sort_by(@, &name) | [-1].id" -o tsv)
-          fi
-          if [[ -z "$TEST_WS_ID" ]]; then
-            echo "::error::Could not find test AML workspace matching '${{ env.PROJECT }}-test-*'"
-            echo "Diagnostics: workspaces in $EXPECTED_TEST_RG"
-            az ml workspace list --resource-group "$EXPECTED_TEST_RG" --query "[].name" -o tsv 2>/dev/null || true
-            exit 1
-          fi
-          TEST_WS=$(echo "$TEST_WS_ID" | awk -F/ '{print $9}')
-          TEST_RG=$(echo "$TEST_WS_ID" | awk -F/ '{print $5}')
-          if [[ -z "$TEST_WS" || -z "$TEST_RG" ]]; then
-            echo "::error::Could not derive workspace/resource-group from workspace id: $TEST_WS_ID"
-            exit 1
-          fi
-          echo "TEST_WORKSPACE=$TEST_WS" >> "$GITHUB_ENV"
-          echo "TEST_RESOURCE_GROUP=$TEST_RG" >> "$GITHUB_ENV"
-          echo "Resolved test workspace: $TEST_WS"
-          echo "Resolved test resource group: $TEST_RG"
+        uses: ./.github/actions/resolve-aml-workspace.yml
+        with:
+          aml_env: test
+          project: ${{ env.PROJECT }}
 
       - name: Set defaults
         run: |
           az configure --defaults \
-            group=$TEST_RESOURCE_GROUP \
-            workspace=$TEST_WORKSPACE
+            group="$TEST_RESOURCE_GROUP" \
+            workspace="$TEST_WORKSPACE"
 
       - name: Ensure data asset exists
         run: |
@@ -95,7 +74,7 @@ jobs:
         id: pipeline
         run: |
           run_id=$(az ml job create \
-            --file ${{ env.MLOPS_DIR }}/train/pipeline.yml \
+            --file $MLOPS_DIR/train/pipeline.yml \
             --query name -o tsv)
           echo "Pipeline submitted: $run_id"
 
@@ -131,55 +110,34 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Install ML Extension
+        run: az extension add -n ml --yes
+
       - name: Ensure inference environment exists in shared registry
         run: |
           if az ml environment show \
             --name readmission-inference-env \
-            --version 1 \
-            --registry-name "${{ env.REGISTRY_NAME }}" >/dev/null 2>&1; then
+            --version "$INFERENCE_ENV_VERSION" \
+            --registry-name "$REGISTRY_NAME" >/dev/null 2>&1; then
             echo "Inference environment already registered"
           else
             az ml environment create \
-              --file "${{ env.MLOPS_DIR }}/deploy/online/inference-env.yml" \
-              --registry-name "${{ env.REGISTRY_NAME }}"
+              --file "$MLOPS_DIR/deploy/online/inference-env.yml" \
+              --registry-name "$REGISTRY_NAME" \
+              --version "$INFERENCE_ENV_VERSION"
           fi
-
-      - name: Install ML Extension
-        run: az extension add -n ml --yes
 
       - name: Resolve Test workspace name
-        run: |
-          # Prefer lookup in expected test RG; fallback to global prefix match.
-          EXPECTED_TEST_RG="rg-${{ env.PROJECT }}-test"
-          TEST_WS_ID=$(az ml workspace list \
-            --resource-group "$EXPECTED_TEST_RG" \
-            --query "sort_by(@, &name) | [-1].id" -o tsv 2>/dev/null || true)
-          if [[ -z "$TEST_WS_ID" ]]; then
-            TEST_WS_ID=$(az ml workspace list \
-              --query "[?starts_with(name, '${{ env.PROJECT }}-test-')] | sort_by(@, &name) | [-1].id" -o tsv)
-          fi
-          if [[ -z "$TEST_WS_ID" ]]; then
-            echo "::error::Could not find test AML workspace matching '${{ env.PROJECT }}-test-*'"
-            echo "Diagnostics: workspaces in $EXPECTED_TEST_RG"
-            az ml workspace list --resource-group "$EXPECTED_TEST_RG" --query "[].name" -o tsv 2>/dev/null || true
-            exit 1
-          fi
-          TEST_WS=$(echo "$TEST_WS_ID" | awk -F/ '{print $9}')
-          TEST_RG=$(echo "$TEST_WS_ID" | awk -F/ '{print $5}')
-          if [[ -z "$TEST_WS" || -z "$TEST_RG" ]]; then
-            echo "::error::Could not derive workspace/resource-group from workspace id: $TEST_WS_ID"
-            exit 1
-          fi
-          echo "TEST_WORKSPACE=$TEST_WS" >> "$GITHUB_ENV"
-          echo "TEST_RESOURCE_GROUP=$TEST_RG" >> "$GITHUB_ENV"
-          echo "Resolved test workspace: $TEST_WS"
-          echo "Resolved test resource group: $TEST_RG"
+        uses: ./.github/actions/resolve-aml-workspace.yml
+        with:
+          aml_env: test
+          project: ${{ env.PROJECT }}
 
       - name: Set Test defaults
         run: |
           az configure --defaults \
-            group=$TEST_RESOURCE_GROUP \
-            workspace=$TEST_WORKSPACE
+            group="$TEST_RESOURCE_GROUP" \
+            workspace="$TEST_WORKSPACE"
 
       - name: Generate unique endpoint name
         id: endpoint
@@ -202,7 +160,7 @@ jobs:
       - name: Create Online Endpoint (Test)
         run: |
           if ! az ml online-endpoint create \
-            --file ${{ env.MLOPS_DIR }}/deploy/online/online-endpoint.yml \
+            --file "$MLOPS_DIR/deploy/online/online-endpoint.yml" \
             --set name=${{ steps.endpoint.outputs.name }} \
             --resource-group "$TEST_RESOURCE_GROUP" \
             --workspace-name "$TEST_WORKSPACE" 2>&1 | tee /tmp/ep-output.txt; then
@@ -227,9 +185,10 @@ jobs:
         run: |
           echo "Deploy context: rg=$TEST_RESOURCE_GROUP workspace=$TEST_WORKSPACE endpoint=${{ steps.endpoint.outputs.name }} model=azureml:readmission-model:${{ steps.model.outputs.version }}"
           az ml online-deployment create \
-            --file ${{ env.MLOPS_DIR }}/deploy/online/online-deployment.yml \
-            --set endpoint_name=${{ steps.endpoint.outputs.name }} \
-            --set model=azureml:readmission-model:${{ steps.model.outputs.version }} \
+            --file "$MLOPS_DIR/deploy/online/online-deployment.yml" \
+            --set "endpoint_name=${{ steps.endpoint.outputs.name }}" \
+            --set "model=azureml:readmission-model:${{ steps.model.outputs.version }}" \
+            --set "environment=azureml://registries/${REGISTRY_NAME}/environments/readmission-inference-env/versions/${INFERENCE_ENV_VERSION}" \
             --resource-group "$TEST_RESOURCE_GROUP" \
             --workspace-name "$TEST_WORKSPACE" \
             --all-traffic
@@ -242,6 +201,8 @@ jobs:
     needs: deploy-test
     runs-on: ubuntu-latest
     environment: test
+    env:
+      ENDPOINT_NAME: ${{ needs.deploy-test.outputs.endpoint_name }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -256,43 +217,21 @@ jobs:
         run: az extension add -n ml --yes
 
       - name: Resolve Test workspace name
-        run: |
-          # Prefer lookup in expected test RG; fallback to global prefix match.
-          EXPECTED_TEST_RG="rg-${{ env.PROJECT }}-test"
-          TEST_WS_ID=$(az ml workspace list \
-            --resource-group "$EXPECTED_TEST_RG" \
-            --query "sort_by(@, &name) | [-1].id" -o tsv 2>/dev/null || true)
-          if [[ -z "$TEST_WS_ID" ]]; then
-            TEST_WS_ID=$(az ml workspace list \
-              --query "[?starts_with(name, '${{ env.PROJECT }}-test-')] | sort_by(@, &name) | [-1].id" -o tsv)
-          fi
-          if [[ -z "$TEST_WS_ID" ]]; then
-            echo "::error::Could not find test AML workspace matching '${{ env.PROJECT }}-test-*'"
-            echo "Diagnostics: workspaces in $EXPECTED_TEST_RG"
-            az ml workspace list --resource-group "$EXPECTED_TEST_RG" --query "[].name" -o tsv 2>/dev/null || true
-            exit 1
-          fi
-          TEST_WS=$(echo "$TEST_WS_ID" | awk -F/ '{print $9}')
-          TEST_RG=$(echo "$TEST_WS_ID" | awk -F/ '{print $5}')
-          if [[ -z "$TEST_WS" || -z "$TEST_RG" ]]; then
-            echo "::error::Could not derive workspace/resource-group from workspace id: $TEST_WS_ID"
-            exit 1
-          fi
-          echo "TEST_WORKSPACE=$TEST_WS" >> "$GITHUB_ENV"
-          echo "TEST_RESOURCE_GROUP=$TEST_RG" >> "$GITHUB_ENV"
-          echo "Resolved test workspace: $TEST_WS"
-          echo "Resolved test resource group: $TEST_RG"
+        uses: ./.github/actions/resolve-aml-workspace.yml
+        with:
+          aml_env: test
+          project: ${{ env.PROJECT }}
 
       - name: Set Test defaults
         run: |
           az configure --defaults \
-            group=$TEST_RESOURCE_GROUP \
-            workspace=$TEST_WORKSPACE
+            group="$TEST_RESOURCE_GROUP" \
+            workspace="$TEST_WORKSPACE"
 
       - name: Invoke endpoint and validate response
         run: |
           RESPONSE=$(az ml online-endpoint invoke \
-            --name ${{ needs.deploy-test.outputs.endpoint_name }} \
+            --name "$ENDPOINT_NAME" \
             --request-file data/sample-request.json)
 
           echo "Response: $RESPONSE"
@@ -319,7 +258,7 @@ jobs:
         run: |
           START=$(date +%s%N)
           az ml online-endpoint invoke \
-            --name ${{ needs.deploy-test.outputs.endpoint_name }} \
+            --name "$ENDPOINT_NAME" \
             --request-file data/sample-request.json \
             -o none
           END=$(date +%s%N)
@@ -365,32 +304,10 @@ jobs:
         run: az extension add -n ml --yes
 
       - name: Resolve Test workspace name
-        run: |
-          # Prefer lookup in expected test RG; fallback to global prefix match.
-          EXPECTED_TEST_RG="rg-${{ env.PROJECT }}-test"
-          TEST_WS_ID=$(az ml workspace list \
-            --resource-group "$EXPECTED_TEST_RG" \
-            --query "sort_by(@, &name) | [-1].id" -o tsv 2>/dev/null || true)
-          if [[ -z "$TEST_WS_ID" ]]; then
-            TEST_WS_ID=$(az ml workspace list \
-              --query "[?starts_with(name, '${{ env.PROJECT }}-test-')] | sort_by(@, &name) | [-1].id" -o tsv)
-          fi
-          if [[ -z "$TEST_WS_ID" ]]; then
-            echo "::error::Could not find test AML workspace matching '${{ env.PROJECT }}-test-*'"
-            echo "Diagnostics: workspaces in $EXPECTED_TEST_RG"
-            az ml workspace list --resource-group "$EXPECTED_TEST_RG" --query "[].name" -o tsv 2>/dev/null || true
-            exit 1
-          fi
-          TEST_WS=$(echo "$TEST_WS_ID" | awk -F/ '{print $9}')
-          TEST_RG=$(echo "$TEST_WS_ID" | awk -F/ '{print $5}')
-          if [[ -z "$TEST_WS" || -z "$TEST_RG" ]]; then
-            echo "::error::Could not derive workspace/resource-group from workspace id: $TEST_WS_ID"
-            exit 1
-          fi
-          echo "TEST_WORKSPACE=$TEST_WS" >> "$GITHUB_ENV"
-          echo "TEST_RESOURCE_GROUP=$TEST_RG" >> "$GITHUB_ENV"
-          echo "Resolved test workspace: $TEST_WS"
-          echo "Resolved test resource group: $TEST_RG"
+        uses: ./.github/actions/resolve-aml-workspace.yml
+        with:
+          aml_env: test
+          project: ${{ env.PROJECT }}
 
       - name: Get latest model version from Test
         id: model
@@ -413,7 +330,7 @@ jobs:
             --version ${{ steps.model.outputs.version }} \
             --resource-group "$TEST_RESOURCE_GROUP" \
             --workspace-name "$TEST_WORKSPACE" \
-            --registry-name ${{ env.REGISTRY_NAME }} \
+            --registry-name "$REGISTRY_NAME" \
             --share-with-name readmission-model \
             --share-with-version ${{ steps.model.outputs.version }} \
             || echo "Model version already exists in registry"
@@ -442,38 +359,16 @@ jobs:
         run: az extension add -n ml --yes
 
       - name: Resolve Prod workspace name
-        run: |
-          # Prefer lookup in expected prod RG; fallback to global prefix match.
-          EXPECTED_PROD_RG="rg-${{ env.PROJECT }}-prod"
-          PROD_WS_ID=$(az ml workspace list \
-            --resource-group "$EXPECTED_PROD_RG" \
-            --query "sort_by(@, &name) | [-1].id" -o tsv 2>/dev/null || true)
-          if [[ -z "$PROD_WS_ID" ]]; then
-            PROD_WS_ID=$(az ml workspace list \
-              --query "[?starts_with(name, '${{ env.PROJECT }}-prod-')] | sort_by(@, &name) | [-1].id" -o tsv)
-          fi
-          if [[ -z "$PROD_WS_ID" ]]; then
-            echo "::error::Could not find prod AML workspace matching '${{ env.PROJECT }}-prod-*'"
-            echo "Diagnostics: workspaces in $EXPECTED_PROD_RG"
-            az ml workspace list --resource-group "$EXPECTED_PROD_RG" --query "[].name" -o tsv 2>/dev/null || true
-            exit 1
-          fi
-          PROD_WS=$(echo "$PROD_WS_ID" | awk -F/ '{print $9}')
-          PROD_RG=$(echo "$PROD_WS_ID" | awk -F/ '{print $5}')
-          if [[ -z "$PROD_WS" || -z "$PROD_RG" ]]; then
-            echo "::error::Could not derive workspace/resource-group from workspace id: $PROD_WS_ID"
-            exit 1
-          fi
-          echo "PROD_WORKSPACE=$PROD_WS" >> "$GITHUB_ENV"
-          echo "PROD_RESOURCE_GROUP=$PROD_RG" >> "$GITHUB_ENV"
-          echo "Resolved prod workspace: $PROD_WS"
-          echo "Resolved prod resource group: $PROD_RG"
+        uses: ./.github/actions/resolve-aml-workspace.yml
+        with:
+          aml_env: prod
+          project: ${{ env.PROJECT }}
 
       - name: Set Prod defaults
         run: |
           az configure --defaults \
-            group=$PROD_RESOURCE_GROUP \
-            workspace=$PROD_WORKSPACE
+            group="$PROD_RESOURCE_GROUP" \
+            workspace="$PROD_WORKSPACE"
 
       - name: Generate unique endpoint name
         id: endpoint
@@ -486,7 +381,8 @@ jobs:
 
       - name: Create Online Endpoint
         run: |
-          UAMI_NAME="${{ env.PROJECT }}-endpoint-identity"
+          ENDPOINT_NAME="${{ steps.endpoint.outputs.name }}"
+          UAMI_NAME="$PROJECT-endpoint-identity"
           UAMI_RESOURCE_ID=$(az identity show \
             --name "$UAMI_NAME" \
             --resource-group "$PROD_RESOURCE_GROUP" \
@@ -498,7 +394,6 @@ jobs:
           fi
           echo "Resolved UAMI: $UAMI_RESOURCE_ID"
 
-          ENDPOINT_NAME="${{ steps.endpoint.outputs.name }}"
           echo "Prod deploy context: rg=$PROD_RESOURCE_GROUP workspace=$PROD_WORKSPACE endpoint=$ENDPOINT_NAME"
 
           python3 -c "
@@ -548,7 +443,7 @@ jobs:
         run: |
           DEPLOYMENT_NAME="blue"
           ENDPOINT_NAME="${{ steps.endpoint.outputs.name }}"
-          MODEL_URI="azureml://registries/${{ env.REGISTRY_NAME }}/models/readmission-model/versions/${{ env.MODEL_VERSION }}"
+          MODEL_URI="azureml://registries/$REGISTRY_NAME/models/readmission-model/versions/$MODEL_VERSION"
 
           if az ml online-deployment show \
             --name "$DEPLOYMENT_NAME" \
@@ -560,14 +455,14 @@ jobs:
             az ml online-deployment update \
               --name "$DEPLOYMENT_NAME" \
               --endpoint-name "$ENDPOINT_NAME" \
-              --file ${{ env.MLOPS_DIR }}/deploy/online/online-deployment.yml \
+              --file "$MLOPS_DIR/deploy/online/online-deployment.yml" \
               --set model="$MODEL_URI" \
               --resource-group "$PROD_RESOURCE_GROUP" \
               --workspace-name "$PROD_WORKSPACE"
           else
             echo "Deployment '$DEPLOYMENT_NAME' not found on endpoint '$ENDPOINT_NAME' - creating"
             az ml online-deployment create \
-              --file ${{ env.MLOPS_DIR }}/deploy/online/online-deployment.yml \
+              --file "$MLOPS_DIR/deploy/online/online-deployment.yml" \
               --set endpoint_name="$ENDPOINT_NAME" \
               --set model="$MODEL_URI" \
               --resource-group "$PROD_RESOURCE_GROUP" \
@@ -583,5 +478,5 @@ jobs:
       - name: Smoke Test
         run: |
           az ml online-endpoint invoke \
-            --name ${{ steps.endpoint.outputs.name }} \
+            --name "${{ steps.endpoint.outputs.name }}" \
             --request-file data/sample-request.json

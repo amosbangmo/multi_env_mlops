@@ -1,0 +1,56 @@
+name: 'Resolve AML Workspace'
+description: >
+  Resolves the AzureML workspace name and resource group for a given environment.
+  Writes <PREFIX>_WORKSPACE and <PREFIX>_RESOURCE_GROUP to GITHUB_ENV,
+  where PREFIX is the uppercase of `aml_env` (e.g. DEV, TEST, PROD).
+  Requires `az ml` extension and Azure login to already be in place.
+
+inputs:
+  aml_env:
+    description: 'Target environment: dev, test, or prod'
+    required: true
+  project:
+    description: 'Project name prefix (e.g. readmit)'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve workspace
+      shell: bash
+      env:
+        AML_ENV: ${{ inputs.aml_env }}
+        PROJECT: ${{ inputs.project }}
+      run: |
+        PREFIX=$(echo "$AML_ENV" | tr '[:lower:]' '[:upper:]')
+        EXPECTED_RG="rg-${PROJECT}-${AML_ENV}"
+
+        # Primary: look in the expected resource group, take the most recent workspace.
+        WS_ID=$(az ml workspace list \
+          --resource-group "$EXPECTED_RG" \
+          --query "sort_by(@, &name) | [-1].id" -o tsv 2>/dev/null || true)
+
+        # Fallback: subscription-wide prefix search.
+        if [[ -z "$WS_ID" ]]; then
+          WS_ID=$(az ml workspace list \
+            --query "[?starts_with(name, '${PROJECT}-${AML_ENV}-')] | sort_by(@, &name) | [-1].id" -o tsv)
+        fi
+
+        if [[ -z "$WS_ID" ]]; then
+          echo "::error::Could not find ${AML_ENV} AML workspace matching '${PROJECT}-${AML_ENV}-*'"
+          echo "Diagnostics: workspaces in $EXPECTED_RG"
+          az ml workspace list --resource-group "$EXPECTED_RG" --query "[].name" -o tsv 2>/dev/null || true
+          exit 1
+        fi
+
+        WS=$(echo "$WS_ID" | awk -F/ '{print $9}')
+        RG=$(echo "$WS_ID" | awk -F/ '{print $5}')
+
+        if [[ -z "$WS" || -z "$RG" ]]; then
+          echo "::error::Could not derive workspace/resource-group from workspace id: $WS_ID"
+          exit 1
+        fi
+
+        echo "${PREFIX}_WORKSPACE=${WS}" >> "$GITHUB_ENV"
+        echo "${PREFIX}_RESOURCE_GROUP=${RG}" >> "$GITHUB_ENV"
+        echo "Resolved ${AML_ENV} workspace: ${WS} (rg: ${RG})"

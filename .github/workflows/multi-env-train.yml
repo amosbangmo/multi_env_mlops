@@ -11,9 +11,10 @@ permissions:
   contents: read
 
 env:
-  REGISTRY_NAME: readmit-registry
   PROJECT: readmit
   MLOPS_DIR: mlops/azureml
+  REGISTRY_NAME: ${{ vars.REGISTRY_NAME }}
+  TRAIN_ENV_VERSION: ${{ vars.TRAIN_ENV_VERSION }}
 
 jobs:
   # -----------------------------------------------------------------------
@@ -37,51 +38,41 @@ jobs:
         run: az extension add -n ml --yes
 
       - name: Resolve Dev workspace name
-        run: |
-          # Workspace names are environment-prefixed and include a dynamic suffix.
-          # Resolve the actual Dev workspace at runtime instead of hardcoding.
-          ws_name=$(az ml workspace list \
-            --resource-group rg-${{ env.PROJECT }}-dev \
-            --query "[?starts_with(name, '${{ env.PROJECT }}-dev-')].name | [0]" -o tsv)
-
-          if [[ -z "$ws_name" ]]; then
-            echo "::error::Could not find a dev AML workspace in rg-${{ env.PROJECT }}-dev"
-            exit 1
-          fi
-
-          # Persist for later steps in this job.
-          echo "DEV_WORKSPACE=$ws_name" >> "$GITHUB_ENV"
-          echo "Using workspace: $ws_name"
+        uses: ./.github/actions/resolve-aml-workspace.yml
+        with:
+          aml_env: dev
+          project: ${{ env.PROJECT }}
 
       - name: Set defaults
         run: |
           # Use discovered workspace so all az ml commands target the correct Dev workspace.
           az configure --defaults \
-            group=rg-${{ env.PROJECT }}-dev \
-            workspace=${{ env.DEV_WORKSPACE }}
+            group="$DEV_RESOURCE_GROUP" \
+            workspace="$DEV_WORKSPACE"
 
       - name: Ensure environment exists in shared registry
         run: |
           # Environment lives in the registry so all workspaces (dev/test/prod) can resolve it.
           if az ml environment show \
             --name readmission-train-env \
-            --version 1 \
+            --version "$TRAIN_ENV_VERSION" \
             --registry-name "$REGISTRY_NAME" >/dev/null 2>&1; then
 
             echo "Environment already exists"
 
           else
             az ml environment create \
-              --file ${{ env.MLOPS_DIR }}/train/train-env.yml \
-              --registry-name ${{ env.REGISTRY_NAME }}
+              --file "$MLOPS_DIR/train/train-env.yml" \
+              --registry-name "$REGISTRY_NAME" \
+              --version "$TRAIN_ENV_VERSION"
           fi
 
       - name: Register Components to Dev workspace
         run: |
           for comp in prep train evaluate register; do
             az ml component create \
-              --file ${{ env.MLOPS_DIR }}/components/$comp.yml \
-              || echo "Component $comp version already exists"
+              --file "$MLOPS_DIR/components/$comp.yml" \
+              --set "environment=azureml://registries/${REGISTRY_NAME}/environments/readmission-train-env/versions/${TRAIN_ENV_VERSION}"
           done
 
       - name: Ensure data asset exists
@@ -93,7 +84,7 @@ jobs:
         id: pipeline
         run: |
           run_id=$(az ml job create \
-            --file ${{ env.MLOPS_DIR }}/train/pipeline-dev.yml \
+            --file $MLOPS_DIR/train/pipeline-dev.yml \
             --query name -o tsv)
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
           echo "Pipeline submitted: $run_id"
@@ -112,10 +103,9 @@ jobs:
       - name: Check model accuracy meets threshold
         run: |
           # Find the evaluate child job run ID
-          run_id="${{ steps.pipeline.outputs.run_id }}"
           eval_run_id=$(az ml job list \
-            --parent-job-name "$run_id" \
-            --resource-group rg-${{ env.PROJECT }}-dev \
+            --parent-job-name "${{ steps.pipeline.outputs.run_id }}" \
+            --resource-group "$DEV_RESOURCE_GROUP" \
             --workspace-name "$DEV_WORKSPACE" \
             --query "[?display_name=='evaluate_model'].name | [0]" -o tsv)
 
@@ -129,7 +119,7 @@ jobs:
           # The tracking URI uses azureml:// scheme — convert to https:// for REST calls
           TRACKING_URI=$(az ml workspace show \
             --name "$DEV_WORKSPACE" \
-            --resource-group rg-${{ env.PROJECT }}-dev \
+            --resource-group "$DEV_RESOURCE_GROUP" \
             --query "mlflow_tracking_uri" -o tsv \
             | sed 's|azureml://|https://|')
 
@@ -199,8 +189,7 @@ jobs:
           # Only components need promotion here.
           for comp in prep train evaluate register; do
             az ml component create \
-              --file ${{ env.MLOPS_DIR }}/components/$comp.yml \
-              --registry-name ${{ env.REGISTRY_NAME }} \
+              --file "$MLOPS_DIR/components/$comp.yml" \
+              --registry-name "$REGISTRY_NAME" \
               || echo "Component $comp version already exists"
           done
-
