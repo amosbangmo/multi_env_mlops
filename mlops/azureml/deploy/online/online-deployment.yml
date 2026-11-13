@@ -5,5 +5,5 @@ model: azureml://registries/readmit-registry/models/readmission-model/labels/lat
 environment: azureml://registries/azureml/environments/mlflow-py312-inference/versions/36
 environment_variables:
   MLFLOW_MODEL_FOLDER: "INPUT_model_path"
-instance_type: Standard_DS4_v2
+instance_type: Standard_DS2_v2
 instance_count: 1

@@ -69,7 +69,7 @@ This lab focuses on the **infrastructure and operations** side of MLOps. The mod
   | Resource | SKU | Cores | Qty | Subtotal |
   |----------|-----|-------|-----|----------|
   | Compute cluster (dev + test) | STANDARD_DS11_V2 | 4 | 2 | 8 |
-  | Online endpoint (test + prod) | Standard_DS4_v2 | 8 | 2 | 16 |
+  | Online endpoint (test + prod) | Standard_DS2_v2 | 8 | 2 | 16 |
   | Compute instance (EDA/dev, optional) | STANDARD_DS11_V2 | 4 | per user | 4 × N |
 
   > **Compute instances are per-person.** Each data scientist who wants to run notebooks or use VS Code on a compute instance needs their own. For a team of N users, add `4 × N` cores to the total. E.g. a team of 10 needs an additional 40 vCPU on top of the 24 baseline (clusters + endpoints), for a total of **64 vCPU**.
