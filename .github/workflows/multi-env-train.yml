@@ -63,10 +63,18 @@ jobs:
       - name: Ensure environment exists in shared registry
         run: |
           # Environment lives in the registry so all workspaces (dev/test/prod) can resolve it.
-          az ml environment create \
-            --file ${{ env.MLOPS_DIR }}/train/train-env.yml \
-            --registry-name ${{ env.REGISTRY_NAME }} \
-            || echo "Environment version already exists in registry"
+          if az ml environment show \
+            --name readmission-train-env \
+            --version 1 \
+            --registry-name "$REGISTRY_NAME" >/dev/null 2>&1; then
+
+            echo "Environment already exists"
+
+          else
+            az ml environment create \
+              --file ${{ env.MLOPS_DIR }}/train/train-env.yml \
+              --registry-name ${{ env.REGISTRY_NAME }}
+          fi
 
       - name: Register Components to Dev workspace
         run: |

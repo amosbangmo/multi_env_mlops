@@ -1,16 +1,21 @@
+name: readmission-train
 channels:
-  - defaults
   - conda-forge
 dependencies:
-  - python=3.13
+  - python=3.13.18
   - pip
   - pip:
-      - mlflow>=2.15
-      - azureml-mlflow>=1.57
-      - azure-ai-ml>=1.20
-      - azure-identity>=1.17
-      - scikit-learn>=1.5
-      - pandas>=2.2
-      - numpy>=2.0
-      - matplotlib>=3.9
-      - pyarrow>=17.0
+      # Socle commun : versions observees dans le MLmodel / conda.yaml de readmission-model:1
+      - mlflow==3.18.0
+      - scikit-learn==1.9.1
+      - skops==0.16.0
+      - numpy==2.5.4
+      - pandas==3.1.1
+      - scipy==1.18.1
+      - psutil==7.2.2
+      # Uniquement pour les etapes Azure ML (prep/train/evaluate/register)
+      - azureml-mlflow>=1.57,<2
+      - azure-ai-ml>=1.20,<2
+      - azure-identity>=1.17,<2
+      - matplotlib>=3.9,<4
+      - pyarrow>=17,<30

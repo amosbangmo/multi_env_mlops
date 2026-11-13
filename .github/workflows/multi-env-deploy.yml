@@ -131,6 +131,19 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Ensure inference environment exists in shared registry
+        run: |
+          if az ml environment show \
+            --name readmission-inference-env \
+            --version 1 \
+            --registry-name "${{ env.REGISTRY_NAME }}" >/dev/null 2>&1; then
+            echo "Inference environment already registered"
+          else
+            az ml environment create \
+              --file "${{ env.MLOPS_DIR }}/deploy/online/inference-env.yml" \
+              --registry-name "${{ env.REGISTRY_NAME }}"
+          fi
+
       - name: Install ML Extension
         run: az extension add -n ml --yes
 
