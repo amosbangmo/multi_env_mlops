@@ -96,6 +96,7 @@ def main(args: argparse.Namespace) -> None:
         path=args.model_output,
         signature=signature,
         input_example=input_example,
+        skops_trusted_types=["sklearn.tree._tree.Tree"]
     )
     print(f"Model saved to {args.model_output}")
 
