@@ -9,7 +9,7 @@ param workspaceId string
 param clusterName string = 'cpu-cluster'
 
 @description('VM size for the cluster nodes.')
-param vmSize string = 'Standard_DS3_v2'
+param vmSize string = 'STANDARD_DS11_V2'
 
 @description('Minimum node count (0 = scale to zero).')
 param minNodeCount int = 0

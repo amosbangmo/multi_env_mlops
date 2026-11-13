@@ -4,7 +4,7 @@ param environment = 'dev'
 param projectName = 'readmit'
 param location = 'swedencentral'
 param mlRegistryId = ''
-param computeVmSize = 'Standard_DS3_v2'
+param computeVmSize = 'STANDARD_DS11_V2'
 param computeMaxNodes = 2
 
 // Set to your Entra object ID (az ad signed-in-user show --query id -o tsv) to grant

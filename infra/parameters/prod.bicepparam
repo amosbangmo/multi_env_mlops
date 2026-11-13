@@ -4,7 +4,7 @@ param environment = 'prod'
 param projectName = 'readmit'
 param location = 'swedencentral'
 param mlRegistryId = ''
-param computeVmSize = 'Standard_DS3_v2'
+param computeVmSize = 'STANDARD_DS11_V2'
 param computeMaxNodes = 1
 param deployEndpointIdentity = true
 

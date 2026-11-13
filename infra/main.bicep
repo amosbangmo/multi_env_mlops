@@ -25,7 +25,7 @@ param location string = resourceGroup().location
 param mlRegistryId string = ''
 
 @description('VM size for compute cluster.')
-param computeVmSize string = 'Standard_DS3_v2'
+param computeVmSize string = 'STANDARD_DS11_V2'
 
 @description('Max nodes for compute cluster.')
 param computeMaxNodes int = 4
