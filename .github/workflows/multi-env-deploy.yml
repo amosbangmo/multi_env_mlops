@@ -139,13 +139,14 @@ jobs:
             group="$TEST_RESOURCE_GROUP" \
             workspace="$TEST_WORKSPACE"
 
-      - name: Generate unique endpoint name
+      - name: Resolve Test endpoint name
         id: endpoint
         run: |
-          # Use run-scoped endpoint names in test to avoid collisions/races from previous runs.
-          ENDPOINT_NAME="readmission-online-${{ github.run_id }}-${{ github.run_attempt }}"
+          SUFFIX=$(echo "$TEST_WORKSPACE" | md5sum | cut -c1-8)
+          ENDPOINT_NAME="readmission-test-${SUFFIX}"
+
           echo "name=$ENDPOINT_NAME" >> "$GITHUB_OUTPUT"
-          echo "Endpoint name: $ENDPOINT_NAME"
+          echo "Endpoint: $ENDPOINT_NAME"
 
       - name: Get latest model version from Test
         id: model
@@ -157,41 +158,69 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Latest model version: $VERSION"
 
-      - name: Create Online Endpoint (Test)
+      - name: Ensure Online Endpoint exists (Test)
         run: |
-          if ! az ml online-endpoint create \
-            --file "$MLOPS_DIR/deploy/online/online-endpoint.yml" \
-            --set name=${{ steps.endpoint.outputs.name }} \
-            --resource-group "$TEST_RESOURCE_GROUP" \
-            --workspace-name "$TEST_WORKSPACE" 2>&1 | tee /tmp/ep-output.txt; then
-            if grep -qiE "EndpointAlreadyExists|already exists" /tmp/ep-output.txt; then
-              echo "Endpoint already exists — continuing"
-            else
-              echo "::error::Endpoint creation failed"
-              cat /tmp/ep-output.txt
-              exit 1
-            fi
-          fi
+          ENDPOINT_NAME="${{ steps.endpoint.outputs.name }}"
 
-          # Fail fast if endpoint was not created or is not visible in this workspace context.
-          az ml online-endpoint show \
-            --name ${{ steps.endpoint.outputs.name }} \
+          if az ml online-endpoint show \
+            --name "$ENDPOINT_NAME" \
             --resource-group "$TEST_RESOURCE_GROUP" \
             --workspace-name "$TEST_WORKSPACE" \
-            -o none \
-            || { echo "::error::Endpoint '${{ steps.endpoint.outputs.name }}' does not exist after create step"; exit 1; }
+            -o none 2>/dev/null; then
+
+            echo "Endpoint already exists: $ENDPOINT_NAME"
+
+          else
+            az ml online-endpoint create \
+              --file "$MLOPS_DIR/deploy/online/online-endpoint.yml" \
+              --set "name=$ENDPOINT_NAME" \
+              --resource-group "$TEST_RESOURCE_GROUP" \
+              --workspace-name "$TEST_WORKSPACE"
+          fi
 
       - name: Deploy Model to Test Endpoint
         run: |
-          echo "Deploy context: rg=$TEST_RESOURCE_GROUP workspace=$TEST_WORKSPACE endpoint=${{ steps.endpoint.outputs.name }} model=azureml:readmission-model:${{ steps.model.outputs.version }}"
-          az ml online-deployment create \
-            --file "$MLOPS_DIR/deploy/online/online-deployment.yml" \
-            --set "endpoint_name=${{ steps.endpoint.outputs.name }}" \
-            --set "model=azureml:readmission-model:${{ steps.model.outputs.version }}" \
-            --set "environment=azureml://registries/${REGISTRY_NAME}/environments/readmission-inference-env/versions/${INFERENCE_ENV_VERSION}" \
+          ENDPOINT_NAME="${{ steps.endpoint.outputs.name }}"
+          MODEL_VERSION="${{ steps.model.outputs.version }}"
+          MODEL_URI="azureml:readmission-model:${MODEL_VERSION}"
+          ENV_URI="azureml://registries/${REGISTRY_NAME}/environments/readmission-inference-env/versions/${INFERENCE_ENV_VERSION}"
+          DEPLOYMENT_FILE="$MLOPS_DIR/deploy/online/online-deployment.yml"
+
+          if az ml online-deployment show \
+            --name blue \
+            --endpoint-name "$ENDPOINT_NAME" \
             --resource-group "$TEST_RESOURCE_GROUP" \
             --workspace-name "$TEST_WORKSPACE" \
-            --all-traffic
+            -o none 2>/dev/null; then
+
+            echo "Updating existing deployment blue"
+
+            az ml online-deployment update \
+              --file "$DEPLOYMENT_FILE" \
+              --name blue \
+              --endpoint-name "$ENDPOINT_NAME" \
+              --set "model=$MODEL_URI" \
+              --set "environment=$ENV_URI" \
+              --resource-group "$TEST_RESOURCE_GROUP" \
+              --workspace-name "$TEST_WORKSPACE"
+
+          else
+            echo "Creating deployment blue"
+
+            az ml online-deployment create \
+              --file "$DEPLOYMENT_FILE" \
+              --set "endpoint_name=$ENDPOINT_NAME" \
+              --set "model=$MODEL_URI" \
+              --set "environment=$ENV_URI" \
+              --resource-group "$TEST_RESOURCE_GROUP" \
+              --workspace-name "$TEST_WORKSPACE"
+          fi
+
+          az ml online-endpoint update \
+            --name "$ENDPOINT_NAME" \
+            --traffic "blue=100" \
+            --resource-group "$TEST_RESOURCE_GROUP" \
+            --workspace-name "$TEST_WORKSPACE"
 
   # -----------------------------------------------------------------------
   # Stage 3: Integration tests against the Test endpoint
@@ -370,7 +399,7 @@ jobs:
             group="$PROD_RESOURCE_GROUP" \
             workspace="$PROD_WORKSPACE"
 
-      - name: Generate unique endpoint name
+      - name: Resolve stable Prod endpoint name
         id: endpoint
         run: |
           # Endpoint names must be unique per region. Use workspace-derived hash.
@@ -417,18 +446,22 @@ jobs:
           cat /tmp/prod-endpoint.yml
           echo "---"
 
-          # Create endpoint; only suppress genuine "already exists" errors
-          if ! az ml online-endpoint create \
-            --file /tmp/prod-endpoint.yml \
+          # Create endpoint;
+          if az ml online-endpoint show \
+            --name "$ENDPOINT_NAME" \
             --resource-group "$PROD_RESOURCE_GROUP" \
-            --workspace-name "$PROD_WORKSPACE" 2>&1 | tee /tmp/ep-output.txt; then
-            if grep -qiE "EndpointAlreadyExists|already exists" /tmp/ep-output.txt; then
-              echo "Endpoint already exists — continuing"
-            else
-              echo "::error::Endpoint creation failed"
-              cat /tmp/ep-output.txt
-              exit 1
-            fi
+            --workspace-name "$PROD_WORKSPACE" \
+            -o none 2>/dev/null; then
+
+            echo "Prod endpoint already exists: $ENDPOINT_NAME"
+
+          else
+            echo "Creating prod endpoint: $ENDPOINT_NAME"
+
+            az ml online-endpoint create \
+              --file /tmp/prod-endpoint.yml \
+              --resource-group "$PROD_RESOURCE_GROUP" \
+              --workspace-name "$PROD_WORKSPACE"
           fi
 
           # Fail fast if endpoint was not created or is not visible in this workspace context.
@@ -443,7 +476,8 @@ jobs:
         run: |
           DEPLOYMENT_NAME="blue"
           ENDPOINT_NAME="${{ steps.endpoint.outputs.name }}"
-          MODEL_URI="azureml://registries/$REGISTRY_NAME/models/readmission-model/versions/$MODEL_VERSION"
+          MODEL_URI="azureml://registries/${REGISTRY_NAME}/models/readmission-model/versions/${MODEL_VERSION}"
+          ENV_URI="azureml://registries/${REGISTRY_NAME}/environments/readmission-inference-env/versions/${INFERENCE_ENV_VERSION}"
 
           if az ml online-deployment show \
             --name "$DEPLOYMENT_NAME" \
@@ -457,14 +491,17 @@ jobs:
               --endpoint-name "$ENDPOINT_NAME" \
               --file "$MLOPS_DIR/deploy/online/online-deployment.yml" \
               --set model="$MODEL_URI" \
+              --set "environment=$ENV_URI" \
               --resource-group "$PROD_RESOURCE_GROUP" \
               --workspace-name "$PROD_WORKSPACE"
+
           else
             echo "Deployment '$DEPLOYMENT_NAME' not found on endpoint '$ENDPOINT_NAME' - creating"
             az ml online-deployment create \
               --file "$MLOPS_DIR/deploy/online/online-deployment.yml" \
               --set endpoint_name="$ENDPOINT_NAME" \
               --set model="$MODEL_URI" \
+              --set "environment=$ENV_URI" \
               --resource-group "$PROD_RESOURCE_GROUP" \
               --workspace-name "$PROD_WORKSPACE"
           fi
