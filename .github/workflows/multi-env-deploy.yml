@@ -74,7 +74,7 @@ jobs:
         id: pipeline
         run: |
           run_id=$(az ml job create \
-            --file $MLOPS_DIR/train/pipeline.yml \
+            --file $MLOPS_DIR/pipelines/pipeline.yml \
             --query name -o tsv)
           echo "Pipeline submitted: $run_id"
 
@@ -122,7 +122,7 @@ jobs:
             echo "Inference environment already registered"
           else
             az ml environment create \
-              --file "$MLOPS_DIR/deploy/online/inference-env.yml" \
+              --file "$MLOPS_DIR/environments/inference-env.yml" \
               --registry-name "$REGISTRY_NAME" \
               --version "$INFERENCE_ENV_VERSION"
           fi
@@ -172,7 +172,7 @@ jobs:
 
           else
             az ml online-endpoint create \
-              --file "$MLOPS_DIR/deploy/online/online-endpoint.yml" \
+              --file "$MLOPS_DIR/deployments/online-endpoint.yml" \
               --set "name=$ENDPOINT_NAME" \
               --resource-group "$TEST_RESOURCE_GROUP" \
               --workspace-name "$TEST_WORKSPACE"
@@ -184,7 +184,7 @@ jobs:
           MODEL_VERSION="${{ steps.model.outputs.version }}"
           MODEL_URI="azureml:readmission-model:${MODEL_VERSION}"
           ENV_URI="azureml://registries/${REGISTRY_NAME}/environments/readmission-inference-env/versions/${INFERENCE_ENV_VERSION}"
-          DEPLOYMENT_FILE="$MLOPS_DIR/deploy/online/online-deployment.yml"
+          DEPLOYMENT_FILE="$MLOPS_DIR/deployments/online-deployment.yml"
 
           if az ml online-deployment show \
             --name blue \
@@ -408,45 +408,10 @@ jobs:
           echo "name=$ENDPOINT_NAME" >> "$GITHUB_OUTPUT"
           echo "Endpoint name: $ENDPOINT_NAME"
 
-      - name: Create Online Endpoint
+      - name: Ensure Online Endpoint exists (Prod)
         run: |
           ENDPOINT_NAME="${{ steps.endpoint.outputs.name }}"
-          UAMI_NAME="$PROJECT-endpoint-identity"
-          UAMI_RESOURCE_ID=$(az identity show \
-            --name "$UAMI_NAME" \
-            --resource-group "$PROD_RESOURCE_GROUP" \
-            --query id -o tsv)
 
-          if [[ -z "$UAMI_RESOURCE_ID" ]]; then
-            echo "::error::Could not resolve user-assigned identity '$UAMI_NAME' in rg '$PROD_RESOURCE_GROUP'"
-            exit 1
-          fi
-          echo "Resolved UAMI: $UAMI_RESOURCE_ID"
-
-          echo "Prod deploy context: rg=$PROD_RESOURCE_GROUP workspace=$PROD_WORKSPACE endpoint=$ENDPOINT_NAME"
-
-          python3 -c "
-          import yaml
-          doc = {
-              'name': '${ENDPOINT_NAME}',
-              'auth_mode': 'aad_token',
-              'identity': {
-                  'type': 'user_assigned',
-                  'user_assigned_identities': [
-                      {'resource_id': '${UAMI_RESOURCE_ID}'}
-                  ]
-              }
-          }
-          with open('/tmp/prod-endpoint.yml', 'w') as f:
-              f.write('\$schema: https://azuremlschemas.azureedge.net/latest/managedOnlineEndpoint.schema.json\n')
-              yaml.dump(doc, f, default_flow_style=False, sort_keys=False)
-          "
-
-          echo "--- Generated endpoint YAML ---"
-          cat /tmp/prod-endpoint.yml
-          echo "---"
-
-          # Create endpoint;
           if az ml online-endpoint show \
             --name "$ENDPOINT_NAME" \
             --resource-group "$PROD_RESOURCE_GROUP" \
@@ -456,21 +421,29 @@ jobs:
             echo "Prod endpoint already exists: $ENDPOINT_NAME"
 
           else
-            echo "Creating prod endpoint: $ENDPOINT_NAME"
+            UAMI_RESOURCE_ID=$(az identity show \
+              --name "${PROJECT}-endpoint-identity" \
+              --resource-group "$PROD_RESOURCE_GROUP" \
+              --query id -o tsv)
+
+            if [[ -z "$UAMI_RESOURCE_ID" ]]; then
+              echo "::error::Production managed identity not found"
+              exit 1
+            fi
 
             az ml online-endpoint create \
-              --file /tmp/prod-endpoint.yml \
+              --file "$MLOPS_DIR/deployments/online-endpoint-prod.yml" \
+              --set "name=$ENDPOINT_NAME" \
+              --set "identity.user_assigned_identities[0].resource_id=$UAMI_RESOURCE_ID" \
               --resource-group "$PROD_RESOURCE_GROUP" \
               --workspace-name "$PROD_WORKSPACE"
           fi
 
-          # Fail fast if endpoint was not created or is not visible in this workspace context.
           az ml online-endpoint show \
-            --name "${ENDPOINT_NAME}" \
+            --name "$ENDPOINT_NAME" \
             --resource-group "$PROD_RESOURCE_GROUP" \
             --workspace-name "$PROD_WORKSPACE" \
-            -o none \
-            || { echo "::error::Endpoint '${ENDPOINT_NAME}' does not exist after create step"; exit 1; }
+            -o none
 
       - name: Deploy Model from Registry
         run: |
@@ -485,11 +458,13 @@ jobs:
             --resource-group "$PROD_RESOURCE_GROUP" \
             --workspace-name "$PROD_WORKSPACE" \
             -o none 2>/dev/null; then
+
             echo "Deployment '$DEPLOYMENT_NAME' exists on endpoint '$ENDPOINT_NAME' - updating"
+
             az ml online-deployment update \
               --name "$DEPLOYMENT_NAME" \
               --endpoint-name "$ENDPOINT_NAME" \
-              --file "$MLOPS_DIR/deploy/online/online-deployment.yml" \
+              --file "$MLOPS_DIR/deployments/online-deployment.yml" \
               --set model="$MODEL_URI" \
               --set "environment=$ENV_URI" \
               --resource-group "$PROD_RESOURCE_GROUP" \
@@ -498,7 +473,7 @@ jobs:
           else
             echo "Deployment '$DEPLOYMENT_NAME' not found on endpoint '$ENDPOINT_NAME' - creating"
             az ml online-deployment create \
-              --file "$MLOPS_DIR/deploy/online/online-deployment.yml" \
+              --file "$MLOPS_DIR/deployments/online-deployment.yml" \
               --set endpoint_name="$ENDPOINT_NAME" \
               --set model="$MODEL_URI" \
               --set "environment=$ENV_URI" \

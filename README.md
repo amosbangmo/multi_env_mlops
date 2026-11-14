@@ -295,14 +295,17 @@ The GitHub Actions workflows handle everything from here:
 │       │   ├── train.yml                # Train component
 │       │   ├── evaluate.yml             # Evaluate component
 │       │   └── register.yml             # Register component
-│       ├── train/
+│       ├── pipelines/
 │       │   ├── pipeline.yml             # 4-step pipeline (references registry components)
-│       │   ├── pipeline-dev.yml         # Dev pipeline (workspace-local component references)
-│       │   └── train-env.yml            # Environment spec (registered in shared registry)
-│       └── deploy/
-│           └── online/
-│               ├── online-endpoint.yml  # AAD-token auth endpoint
-│               └── online-deployment.yml# Blue deployment from registry
+│       │   └── pipeline-dev.yml         # Dev pipeline (workspace-local component references)
+│       ├── environments/
+│       │   ├── train-env.yml            # Training environment (shared registry)
+│       │   └── inference-env.yml        # Inference environment (shared registry)
+│       └── deployments/
+│           ├── online-endpoint.yml      # AAD-token auth endpoint
+│           ├── online-deployment.yml    # Blue deployment from registry
+│           └── scoring/
+│               └── score.py             # Managed online endpoint scoring script
 ├── data/
 │   └── sample-request.json              # Example inference payload
 └── .github/

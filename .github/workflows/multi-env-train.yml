@@ -62,7 +62,7 @@ jobs:
 
           else
             az ml environment create \
-              --file "$MLOPS_DIR/train/train-env.yml" \
+              --file "$MLOPS_DIR/environments/train-env.yml" \
               --registry-name "$REGISTRY_NAME" \
               --version "$TRAIN_ENV_VERSION"
           fi
@@ -84,7 +84,7 @@ jobs:
         id: pipeline
         run: |
           run_id=$(az ml job create \
-            --file $MLOPS_DIR/train/pipeline-dev.yml \
+            --file $MLOPS_DIR/pipelines/pipeline-dev.yml \
             --query name -o tsv)
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
           echo "Pipeline submitted: $run_id"

@@ -1,0 +1,9 @@
+$schema: https://azuremlschemas.azureedge.net/latest/managedOnlineEndpoint.schema.json
+
+name: readmission-online
+auth_mode: aad_token
+
+identity:
+  type: user_assigned
+  user_assigned_identities:
+    - resource_id: placeholder
